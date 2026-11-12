@@ -1,6 +1,3 @@
-node_modules
-dist
-src-tauri/target
-src-tauri/models
-src-tauri/gen/schemas
-src-tauri/gen/apple/build
+/target
+/models
+/.claude/settings.local.json
