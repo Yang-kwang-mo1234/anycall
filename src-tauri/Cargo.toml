@@ -1,0 +1,18 @@
+[package]
+name = "anycall"
+version = "0.1.0"
+description = "실시간 음성→텍스트"
+edition = "2021"
+
+[lib]
+name = "anycall_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+sherpa-onnx = { version = "2.0.1", default-features = false, features = ["static"] }
+cpal = "0.16"

@@ -8,7 +8,7 @@
 - **음성인식 엔진: sherpa-onnx (온디바이스).** 세 OS에서 같은 엔진과 같은 Rust 코드를 쓴다. 인터넷, API 키, 사용량 제한이 없다.
   - 공식 Rust crate `sherpa-onnx`를 쓴다. 빌드할 때 미리 빌드된 라이브러리를 받아 정적으로 링크하고, iOS용 xcframework도 제공한다.
   - sherpa-onnx 저장소에 Tauri v2 예제(`tauri-examples`)가 있다. 구현할 때 참고한다.
-- **모델: 한국어 스트리밍 Zipformer**(`sherpa-onnx-streaming-zipformer-korean-2024-06-16`, int8 약 126MB)를 기본으로 한다. 0단계에서 더 가벼운 Moonshine 한국어 모델과 비교해 확정한다.
+- **모델: Moonshine tiny 한국어**(`sherpa-onnx-moonshine-tiny-ko-quantized-2026-02-27`, 약 72MB) + Silero VAD(`silero_vad.onnx`). 0단계 비교 결과로 확정했다(아래 "0단계 결과").
 - **프론트엔드: Vite + vanilla TypeScript.** 화면은 textarea 하나와 시작/정지 버튼 하나다.
 
 ## 엔진을 이렇게 정한 이유
@@ -40,6 +40,23 @@
    - 둘 중 하나가 쓸 만하면 그 모델로 진행한다. 둘 다 쓸 만하면 실시간성이 좋은 Zipformer를 쓴다.
    - 둘 다 부족하면 구현을 멈추고 엔진을 다시 정한다(Apple 기기는 OS 내장 엔진, Windows는 클라우드 API 등).
 
+## 0단계 결과 (2026-11-12, Windows)
+이 PC에 마이크가 없어 실시간 마이크 비교는 하지 못했고, 모델에 들어 있는 한국어 테스트 음성 5개(정답 문장 포함)로 비교했다.
+
+| 음성 | 정답 | Zipformer | Moonshine |
+|---|---|---|---|
+| 0.wav (3.5초) | 그는 괜찮은 척하려고 애쓰는 것 같았다. | 걔는괜찮은척하려구애쓰는거같았다 | 그는 괜찮은 척하려고 애쓰는 것 같았다. |
+| 1.wav (3.4초) | 지하철에서 다리를 벌리고 앉지 마라. | 지하철에서다리를벌리고하진마라. | 지하철에서 다리를 벌리고 앉지 마라. |
+| 2.wav (6.6초) | 부모가 저지르는 큰 실수 중 하나는 … 다른 집 아이와 비교하는 것이다. | 부모가저질른큰실수중하나는자기아이를다른집안과비교하는것이다. | 부모가 저지르는 큰 실수 중 하나는 자기 아이를 다른 집 아이와 비교하는 것이다 |
+| 3.wav (2.7초) | 주민등록증을 보여 주시겠어요? | 주민등록증을보여주시겠어요? | 주민등록증을 보여주시겠어요? |
+| Moonshine 0.wav (6.9초) | 조국이 당신을 위해 … 물으십시오. | 즐극기단신을위해…무르십시오. | 조국이 당신을 위해 무엇을 해줄 수 있는지 묻지 말고 … 물으십시오. |
+
+- Zipformer는 띄어쓰기가 전혀 없고 오류가 많았다. Moonshine은 거의 정답이고 띄어쓰기·문장부호도 맞았다.
+- 디코딩 시간은 Moonshine이 0.1~0.3초, Zipformer가 0.2~0.5초였다(같은 PC, 스레드 2개).
+- **Moonshine으로 정했다.** 대신 진짜 스트리밍이 아니므로 VAD로 발화 구간을 잡고 말하는 동안 0.2초마다 구간 전체를 다시 디코딩해 부분 텍스트를 만든다.
+- **라이선스**: 한국어 Moonshine 모델은 Moonshine AI Community License다. 연구·비상업 용도는 무료이고, 상업 용도는 연매출 100만 달러 미만이면 무료지만 moonshine.ai에 등록해야 한다. 배포 전에 다시 확인한다.
+- 실제 마이크로 말하면서 확인하는 일(실시간성)은 마이크가 있는 PC에서 해야 한다.
+
 ## 구조
 ### 명령 (프론트 → Rust)
 - `start_listening()`: 마이크를 열고 인식을 시작한다.
@@ -56,9 +73,9 @@
 ### 처리 흐름
 1. `cpal`로 마이크 입력을 받는다(Windows는 WASAPI, Apple은 CoreAudio).
 2. 오디오 콜백에서 받은 샘플을 채널로 인식 스레드에 넘긴다.
-3. 인식 스레드가 샘플을 `OnlineRecognizer` 스트림에 넣고 디코딩한다. 16kHz 변환은 sherpa-onnx가 한다.
-4. 결과 텍스트가 바뀌면 `stt-partial`을 보낸다.
-5. sherpa-onnx의 끝점 감지(침묵)가 문장 끝을 알리면 `stt-final`을 보내고 스트림을 초기화한다.
+3. 인식 스레드가 샘플을 16kHz로 바꿔(`LinearResampler`) Silero VAD에 넣는다.
+4. 말하는 중이면 0.2초마다 지금까지의 구간을 `OfflineRecognizer`(Moonshine)로 디코딩하고, 결과가 바뀌면 `stt-partial`을 보낸다.
+5. VAD가 0.5초 침묵으로 구간을 끝내면(또는 10초를 넘으면) 그 구간을 디코딩해 `stt-final`을 보낸다.
 
 ### 화면 동작
 - 확정 텍스트 뒤에 부분 텍스트를 붙여 실시간으로 갱신한다. 문장이 확정되면 부분 텍스트를 확정 텍스트로 옮긴다.
@@ -68,7 +85,7 @@
 ## 파일 구성
 - `package.json`, `vite.config.ts`, `index.html`, `src/main.ts`: 화면, 명령 호출, 이벤트 수신
 - `src-tauri/Cargo.toml`: `tauri`, `sherpa-onnx`, `cpal`
-- `src-tauri/tauri.conf.json`: `bundle.resources`에 모델 폴더를 넣는다.
+- `src-tauri/tauri.conf.json`: `bundle.resources`에 Moonshine 모델 파일 3개, `LICENSE`, `silero_vad.onnx`를 넣는다.
 - `src-tauri/capabilities/default.json`
 - `src-tauri/src/lib.rs`: 명령 등록, 상태 관리
 - `src-tauri/src/stt.rs`: 마이크 입력, 인식 스레드, 이벤트 전송. 세 OS 공용이다.
@@ -91,7 +108,8 @@
 ## 확인이 필요한 위험
 - **iOS 마이크 입력**: `cpal`의 iOS 지원이 Tauri 앱 안에서 문제없이 동작하는지 확인되지 않았다. 안 되면 iOS만 `AVAudioEngine`으로 입력을 받는다.
 - **iOS 링크**: `sherpa-onnx` crate가 iOS를 지원한다고 하지만 Tauri iOS 빌드에서의 설정 절차는 찾지 못했다. 데스크톱이 동작한 직후에 iOS 빌드부터 확인한다.
-- **앱 용량**: 모델 때문에 설치 용량이 130MB 안팎 늘어난다.
+- **앱 용량**: 모델 때문에 설치 용량이 약 75MB 늘어난다.
+- **긴 발화**: Moonshine은 구간이 길수록 중간 디코딩이 느려진다. 그래서 VAD 최대 구간을 10초로 둔다.
 - **모델 라이선스**: 배포하기 전에 선택한 모델의 라이선스를 확인한다.
 
 ## 범위 밖
