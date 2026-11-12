@@ -1,0 +1,14 @@
+[package]
+name = "anycall"
+version = "0.2.0"
+description = "Windows 동영상 실시간 번역 자막 (영어·일본어 → 한국어, 온디바이스)"
+edition = "2021"
+
+[dependencies]
+sherpa-onnx = { version = "2.0.1", default-features = false, features = ["static"] }
+ct2rs = { version = "0.11.0", default-features = false, features = ["mkl", "tokenizers"] }
+# ct2rs-sys가 쓰는 MKL 정적 라이브러리. 코드에서 참조해야 링크에 들어간다(main.rs).
+intel-onemkl-prebuild = "0.2.2"
+anyhow = "1"
+wasapi = "0.27.0"
+eframe = "0.37.0"

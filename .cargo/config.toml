@@ -1,0 +1,3 @@
+# sherpa-onnx 정적 라이브러리가 /MT(정적 C 런타임)로 빌드돼 있어 맞춘다. CTranslate2도 이 설정을 따라 빌드된다.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
