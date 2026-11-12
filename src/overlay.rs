@@ -23,6 +23,8 @@ pub fn run(model: Model) -> eframe::Result {
             .with_title("anycall 자막")
             .with_inner_size([340.0, 200.0])
             .with_resizable(false),
+        // wgpu는 Windows에서 투명 창을 합성하지 못한다. 자막 오버레이를 투명하게 하려고 OpenGL을 쓴다.
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
     eframe::run_native("anycall", options, Box::new(move |cc| Ok(Box::new(App::new(cc, model)))))
@@ -38,20 +40,25 @@ struct App {
     overlay_rect: Option<(Pos2, Vec2)>,
 }
 
+/// 한글(맑은 고딕)과 일본어(유 고딕) 글꼴을 넣는다.
+pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    for (name, path) in FONTS.iter().rev() {
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts.font_data.insert((*name).into(), Arc::new(FontData::from_owned(bytes)));
+            fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, (*name).into());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
 fn overlay_id() -> ViewportId {
     ViewportId::from_hash_of("overlay")
 }
 
 impl App {
     fn new(cc: &eframe::CreationContext<'_>, model: Model) -> Self {
-        let mut fonts = FontDefinitions::default();
-        for (name, path) in FONTS.iter().rev() {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert((*name).into(), Arc::new(FontData::from_owned(bytes)));
-                fonts.families.get_mut(&FontFamily::Proportional).unwrap().insert(0, (*name).into());
-            }
-        }
-        cc.egui_ctx.set_fonts(fonts);
+        install_fonts(&cc.egui_ctx);
 
         let ctx = cc.egui_ctx.clone();
         let shared = Shared::new(
@@ -161,7 +168,7 @@ impl eframe::App for App {
         }
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if let Some(s) = self.session.take() {
             s.stop();
         }
@@ -210,7 +217,7 @@ fn draw_overlay(ui: &mut egui::Ui, shared: &Shared, show_source: bool) {
 }
 
 /// 검은 외곽선을 두른 글자를 `bottom` 위에 줄마다 가운데 정렬로 그리고, 그린 영역의 윗변을 돌려준다.
-fn outlined(painter: &egui::Painter, text: &str, size: f32, color: Color32, wrap: f32, center_x: f32, bottom: f32) -> f32 {
+pub fn outlined(painter: &egui::Painter, text: &str, size: f32, color: Color32, wrap: f32, center_x: f32, bottom: f32) -> f32 {
     let mut job = egui::text::LayoutJob::simple(text.to_owned(), FontId::proportional(size), color, wrap);
     job.halign = egui::Align::Center;
     let galley = painter.layout_job(job);

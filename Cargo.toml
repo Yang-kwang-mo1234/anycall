@@ -11,4 +11,23 @@ ct2rs = { version = "0.11.0", default-features = false, features = ["mkl", "toke
 intel-onemkl-prebuild = "0.2.2"
 anyhow = "1"
 wasapi = "0.27.0"
-eframe = "0.37.0"
+eframe = { version = "0.37.0", features = ["glow"] }
+encoding_rs = "0.8"
+raw-window-handle = "0.6.2"
+windows-core = "0.62"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Variant",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }

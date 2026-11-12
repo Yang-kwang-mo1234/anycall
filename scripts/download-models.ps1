@@ -31,6 +31,9 @@ foreach ($Size in $Sizes) {
     }
 }
 
+# 음성 언어 판별(플레이어의 AI 자막 자동 선택): Whisper tiny 다국어
+Get-Archive "sherpa-onnx-whisper-tiny" "tiny-tokens.txt"
+
 # 번역: NLLB-200 distilled 600M, CTranslate2 int8 변환본
 $Nllb = Join-Path $Dir "nllb-200-distilled-600M-ct2-int8"
 $Hf = "https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main"
