@@ -12,12 +12,12 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 const VAD_MODEL: &str = "models/silero_vad.onnx";
-const VAD_WINDOW: usize = 512; // Silero VAD 입력 단위(샘플)
+pub const VAD_WINDOW: usize = 512; // Silero VAD 입력 단위(샘플)
 const PRE_ROLL: usize = 16 * VAD_WINDOW; // 말 시작 직전 약 0.5초를 남겨 둔다.
 const PARTIAL_INTERVAL: Duration = Duration::from_millis(200);
 const MIN_SILENCE: f32 = 0.4;
 const MIN_SPEECH: f32 = 0.25;
-const MAX_SPEECH: f32 = 6.0;
+pub const MAX_SPEECH: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Model {
@@ -61,9 +61,32 @@ impl Recognizer {
         // 토크나이저의 단어 시작 표시(▁)가 결과에 섞여 나오는 경우가 있다.
         stream
             .get_result()
-            .map(|r| r.text.replace('▁', " ").trim().to_string())
+            .map(|r| tidy_spaces(r.text.replace('▁', " ").trim()))
             .unwrap_or_default()
     }
+}
+
+/// Moonshine 일본어 모델은 가끔 글자마다 공백을 넣는다(`国 が 花 と …`). 양쪽이 모두 일본어·한자·전각 문자인
+/// 공백은 지운다. 영어 단어 사이 공백은 그대로 둔다.
+pub fn tidy_spaces(s: &str) -> String {
+    fn cjk(c: char) -> bool {
+        matches!(c as u32, 0x3000..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let has_cjk = chars.iter().any(|c| cjk(*c));
+    let mut out = String::with_capacity(s.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if c == ' ' {
+            let prev = out.chars().last();
+            let next = chars[i + 1..].iter().find(|c| **c != ' ');
+            let between_cjk = prev.is_some_and(|p| cjk(p) || p.is_ascii_digit()) && next.is_some_and(|n| cjk(*n) || n.is_ascii_digit());
+            if (between_cjk && has_cjk) || prev == Some(' ') {
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
 }
 
 pub enum Event {
@@ -86,22 +109,26 @@ pub struct Segmenter {
     seg: u64,
 }
 
+/// 침묵 0.4초 또는 최대 6초에서 구간을 끝내는 Silero VAD
+pub fn create_vad() -> Result<VoiceActivityDetector, String> {
+    let mut c = VadModelConfig::default();
+    c.silero_vad.model = Some(model_file(VAD_MODEL.into())?);
+    c.silero_vad.threshold = 0.5;
+    c.silero_vad.min_silence_duration = MIN_SILENCE;
+    c.silero_vad.min_speech_duration = MIN_SPEECH;
+    c.silero_vad.max_speech_duration = MAX_SPEECH;
+    c.silero_vad.window_size = VAD_WINDOW as i32;
+    c.sample_rate = SAMPLE_RATE as i32;
+    VoiceActivityDetector::create(&c, 30.0).ok_or_else(|| "VAD 모델을 불러오지 못했습니다.".into())
+}
+
 fn secs(s: f32) -> Duration {
     Duration::from_secs_f32(s.max(0.0))
 }
 
 impl Segmenter {
     pub fn new(recognizer: std::sync::Arc<Recognizer>) -> Result<Self, String> {
-        let vad_path = model_file(VAD_MODEL.into())?;
-        let mut c = VadModelConfig::default();
-        c.silero_vad.model = Some(vad_path);
-        c.silero_vad.threshold = 0.5;
-        c.silero_vad.min_silence_duration = MIN_SILENCE;
-        c.silero_vad.min_speech_duration = MIN_SPEECH;
-        c.silero_vad.max_speech_duration = MAX_SPEECH;
-        c.silero_vad.window_size = VAD_WINDOW as i32;
-        c.sample_rate = SAMPLE_RATE as i32;
-        let vad = VoiceActivityDetector::create(&c, 30.0).ok_or("VAD 모델을 불러오지 못했습니다.")?;
+        let vad = create_vad()?;
         let now = Instant::now();
         Ok(Self {
             recognizer,
@@ -180,5 +207,16 @@ impl Segmenter {
             let n = self.buffer.len();
             self.finish(n, Instant::now(), out);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tidy_spaces_joins_japanese_only() {
+        use super::tidy_spaces;
+        assert_eq!(tidy_spaces("国 が 花 と の た め に 5 0 円"), "国が花とのために50円");
+        assert_eq!(tidy_spaces("Ask not what  your country"), "Ask not what your country");
+        assert_eq!(tidy_spaces("東京 Tower へ"), "東京 Tower へ");
     }
 }
