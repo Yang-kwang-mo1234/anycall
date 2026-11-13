@@ -4,6 +4,8 @@ use crate::analyze::Cue;
 use std::path::{Path, PathBuf};
 
 const EXTS: &[&str] = &["srt", "smi", "sami", "vtt", "ass", "ssa"];
+/// 자막에 맞는 동영상을 찾을 때 보는 확장자
+const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "m4v", "wmv", "ts", "m2ts", "mpg", "mpeg", "flv"];
 const KOREAN_TAGS: &[&str] = &["ko", "kor", "korean", "kr", "ko-kr", "한국어", "한글"];
 
 /// 찾은 자막 파일
@@ -255,6 +257,28 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     (!v.is_empty()).then_some(v)
 }
 
+/// 자막 파일 옆에서 그 자막에 맞는 동영상을 찾는다(자막 파일을 실행하거나 끌어다 놓을 때).
+/// `영화.srt`, `영화.ko.srt`, `영화.en.forced.srt`는 모두 `영화.mp4`에 맞는다.
+/// 이름이 맞는 동영상이 여럿이면 이름이 가장 긴 것(`영화.part2.mp4`가 `영화.mp4`보다 앞)을 고른다.
+pub fn find_video(sub: &Path) -> Option<PathBuf> {
+    let dir = sub.parent()?;
+    let sub_stem = sub.file_stem()?.to_string_lossy().to_lowercase();
+    let videos = std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(|p| {
+        p.is_file() && p.extension().is_some_and(|e| VIDEO_EXTS.contains(&e.to_string_lossy().to_lowercase().as_str()))
+    });
+    best_video(&sub_stem, videos)
+}
+
+fn best_video(sub_stem: &str, videos: impl Iterator<Item = PathBuf>) -> Option<PathBuf> {
+    videos
+        .filter_map(|p| {
+            let stem = p.file_stem()?.to_string_lossy().to_lowercase();
+            (sub_stem == stem || sub_stem.starts_with(&format!("{stem}."))).then_some((stem.len(), p))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, p)| p)
+}
+
 /// 자막 파일 확장자인가(끌어다 놓을 때 동영상과 구분한다)
 pub fn is_subtitle_ext(ext: &str) -> bool {
     EXTS.contains(&ext)
@@ -263,6 +287,16 @@ pub fn is_subtitle_ext(ext: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_for_subtitle() {
+        let vids = || ["영화.mp4", "영화.part2.mkv", "다른.mp4"].into_iter().map(|n| PathBuf::from(format!("d/{n}")));
+        assert_eq!(best_video("영화", vids()), Some(PathBuf::from("d/영화.mp4")));
+        assert_eq!(best_video("영화.ko", vids()), Some(PathBuf::from("d/영화.mp4")));
+        assert_eq!(best_video("영화.part2.ko", vids()), Some(PathBuf::from("d/영화.part2.mkv")));
+        assert_eq!(best_video("영화2", vids()), None);
+        assert_eq!(best_video("없음", vids()), None);
+    }
 
     #[test]
     fn srt_with_tags() {

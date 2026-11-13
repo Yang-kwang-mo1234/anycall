@@ -1,115 +1,124 @@
-//! NLLB-200 distilled 600M (CTranslate2, Intel은 int8·그 밖은 float32)으로 영어·일본어를 한국어로 번역한다.
+//! Hy-MT2-1.8B (Tencent, GGUF Q4_K_M)을 llama.cpp로 돌려 영어·일본어를 한국어로 번역한다.
+//!
+//! 디코더만 있는 LLM이라 모델 카드의 번역 프롬프트를 채팅 형식으로 넣고, 답을 그리디로 생성한다.
+//! 자막은 같은 원문에 같은 번역이 나와야 해서 샘플링(temperature)은 쓰지 않는다.
 
 use crate::Lang;
-use ct2rs::{ComputeType, Config, TranslationOptions};
+use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::llama_backend::LlamaBackend;
+use llama_cpp_2::llama_batch::LlamaBatch;
+use llama_cpp_2::model::params::LlamaModelParams;
+use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::sampling::LlamaSampler;
+use std::num::NonZeroU32;
 use std::path::Path;
+use std::sync::OnceLock;
 
-pub const NLLB_DIR: &str = "models/nllb-200-distilled-600M-ct2-int8";
+pub const MODEL_FILE: &str = "models/Hy-MT2-1.8B-GGUF/Hy-MT2-1.8B-Q4_K_M.gguf";
+
+/// 원문 + 프롬프트 + 번역이 들어갈 문맥 길이. 자막 구간은 길어야 몇십 단어다.
+const N_CTX: u32 = 1024;
+/// 번역문 최대 토큰 수(이전 NLLB 설정과 같다).
+const MAX_NEW_TOKENS: usize = 128;
+/// 모델 카드 권장값(1.8B): repetition_penalty 1.05.
+const REPEAT_PENALTY: f32 = 1.05;
 
 pub struct Translator {
-    inner: ct2rs::Translator<ct2rs::tokenizers::auto::Tokenizer>,
-    options: TranslationOptions<String, String>,
+    model: LlamaModel,
+    threads: i32,
+}
+
+/// llama.cpp 백엔드는 프로세스에 하나만 만들 수 있다.
+fn backend() -> Result<&'static LlamaBackend, String> {
+    static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
+    BACKEND
+        .get_or_init(|| {
+            let mut b = LlamaBackend::init().map_err(|e| format!("llama.cpp 초기화 실패: {e}"))?;
+            if std::env::var_os("ANYCALL_LLAMA_LOG").is_none() {
+                b.void_logs();
+            }
+            Ok(b)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 impl Translator {
     pub fn load() -> Result<Self, String> {
-        if !Path::new(NLLB_DIR).join("model.bin").is_file() {
-            return Err(format!("번역 모델 파일이 없습니다: {NLLB_DIR}/model.bin"));
+        if !Path::new(MODEL_FILE).is_file() {
+            return Err(format!("번역 모델 파일이 없습니다: {MODEL_FILE}"));
         }
-        let config = Config {
-            compute_type: select_compute_type(),
-            num_threads_per_replica: 1,
-            ..Config::default()
-        };
-        let inner = ct2rs::Translator::new(NLLB_DIR, &config)
+        let model = LlamaModel::load_from_file(backend()?, MODEL_FILE, &LlamaModelParams::default())
             .map_err(|e| format!("번역 모델을 불러오지 못했습니다: {e}"))?;
-        let options = TranslationOptions {
-            beam_size: 1,
-            max_decoding_length: 128,
-            repetition_penalty: 1.1,
-            ..TranslationOptions::default()
-        };
-        Ok(Self { inner, options })
+        Ok(Self { model, threads: thread_count() })
     }
 
     /// `cancel`이 true를 돌려주면 생성 도중에 멈추고 `Ok(None)`을 준다.
-    pub fn translate(&self, lang: Lang, text: &str, cancel: &dyn Fn() -> bool) -> Result<Option<String>, String> {
-        let source = match lang {
-            Lang::En => "eng_Latn",
-            Lang::Ja => "jpn_Jpan",
-        };
-        let mut cancelled = false;
-        let mut on_step = |_: ct2rs::GenerationStepResult| {
-            cancelled = cancel();
-            if cancelled {
-                anyhow::bail!("cancelled");
-            }
-            Ok(())
-        };
-        let res = self.inner.translate_batch_with_source_and_target_prefix(
-            &[text],
-            &[vec![source]],
-            &[vec!["kor_Hang"]],
-            &self.options,
-            Some(&mut on_step),
-        );
-        match res {
-            Err(_) if cancelled => Ok(None),
-            Err(e) => Err(format!("번역 실패: {e}")),
-            // 모르는 토큰 표시(<unk>)는 자막에 보이지 않게 뺀다.
-            Ok(r) => Ok(Some(r.into_iter().next().map(|(t, _)| t.replace("<unk>", "").trim().to_string()).unwrap_or_default())),
+    pub fn translate(&self, _lang: Lang, text: &str, cancel: &dyn Fn() -> bool) -> Result<Option<String>, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(Some(String::new()));
         }
+        let vocab = self.model.vocab();
+        let tokens = vocab.tokenize(prompt(text).as_bytes(), false, true);
+        if tokens.len() + MAX_NEW_TOKENS > N_CTX as usize {
+            return Err(format!("원문이 너무 깁니다({}토큰)", tokens.len()));
+        }
+
+        // 문맥은 번역할 때마다 새로 만든다(KV 캐시 약 64MB, 만드는 데 몇 ms). 모델은 공유한다.
+        let params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(N_CTX))
+            .with_n_batch(N_CTX)
+            .with_n_threads(self.threads)
+            .with_n_threads_batch(self.threads);
+        let mut ctx = self.model.new_context(backend()?, params).map_err(|e| format!("번역 문맥 생성 실패: {e}"))?;
+
+        let mut batch = LlamaBatch::new(N_CTX as usize, 1);
+        let last = tokens.len() as i32 - 1;
+        for (i, &t) in tokens.iter().enumerate() {
+            batch.add(t, i as i32, &[0], i as i32 == last).map_err(|e| e.to_string())?;
+        }
+        ctx.decode(&mut batch).map_err(|e| format!("번역 실패: {e}"))?;
+
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::penalties(self.model.n_vocab(), 64, REPEAT_PENALTY, 0.0, 0.0),
+            LlamaSampler::greedy(),
+        ]);
+        let mut out = Vec::new();
+        let mut pos = tokens.len() as i32;
+        for _ in 0..MAX_NEW_TOKENS {
+            if cancel() {
+                return Ok(None);
+            }
+            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+            sampler.accept(token);
+            if vocab.is_eog(token) {
+                break;
+            }
+            vocab.token_to_piece_into(token, &mut out, false, None);
+            batch.clear();
+            batch.add(token, pos, &[0], true).map_err(|e| e.to_string())?;
+            pos += 1;
+            ctx.decode(&mut batch).map_err(|e| format!("번역 실패: {e}"))?;
+        }
+        Ok(Some(String::from_utf8_lossy(&out).trim().to_string()))
     }
 }
 
-/// CPU에 맞는 계산 방식을 고른다.
-/// - Intel: MKL int8 (가장 빠름).
-/// - 그 밖(AMD 등): CTranslate2가 Intel이 아니면 MKL을 끄고, 그러면 int8을 지원하지 않는다.
-///   MKL을 켜도 int8 GEMM은 Intel 아닌 CPU에서 수십 배 느리다(문장당 수십 초).
-///   그래서 MKL을 켜고 float32로 쓴다(int8 모델을 불러올 때 float32로 풀린다. 메모리는 더 쓴다).
-///
-/// `ANYCALL_CT2_COMPUTE`(int8 | int8_float32 | float32)로 강제로 고를 수 있다.
-fn select_compute_type() -> ComputeType {
-    let forced = match std::env::var("ANYCALL_CT2_COMPUTE").as_deref() {
-        Ok("int8") => Some(ComputeType::INT8),
-        Ok("int8_float32") => Some(ComputeType::INT8_FLOAT32),
-        Ok("float32") => Some(ComputeType::FLOAT32),
-        _ => None,
-    };
-    forced.unwrap_or(if cpu_is_intel() { ComputeType::INT8 } else { ComputeType::FLOAT32 })
+/// 모델 카드의 기본 번역 프롬프트(영어판)를 채팅 형식(chat_template.jinja)으로 감싼다. 시스템 프롬프트는 없다.
+fn prompt(text: &str) -> String {
+    format!(
+        "<｜hy_begin▁of▁sentence｜><｜hy_User｜>Translate the following text into Korean. \
+         Note that you should only output the translated result without any additional explanation:\n\n\
+         {text}<｜hy_Assistant｜>"
+    )
 }
 
-fn cpu_is_intel() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let r = std::arch::x86_64::__cpuid(0);
-        let mut v = [0u8; 12];
-        v[..4].copy_from_slice(&r.ebx.to_le_bytes());
-        v[4..8].copy_from_slice(&r.edx.to_le_bytes());
-        v[8..].copy_from_slice(&r.ecx.to_le_bytes());
-        &v == b"GenuineIntel"
+/// 인식·동영상 디코딩과 CPU를 나눠 쓰므로 논리 코어의 절반을 쓴다. `ANYCALL_LLM_THREADS`로 바꿀 수 있다.
+fn thread_count() -> i32 {
+    if let Some(n) = std::env::var("ANYCALL_LLM_THREADS").ok().and_then(|v| v.parse().ok()).filter(|&n: &i32| n > 0) {
+        return n;
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        false
-    }
-}
-
-/// Intel이 아닌 CPU에서 CTranslate2가 MKL을 쓰도록 CT2_USE_MKL=1을 준다. main 맨 앞에서 부른다.
-/// CTranslate2는 이 값을 main보다 먼저(정적 초기화 때) 읽어 두므로 실행 중에 바꿔서는 소용없다.
-/// 그래서 값이 없으면 같은 인자로 자기 자신을 CT2_USE_MKL=1과 함께 다시 실행하고 그 종료 코드로 끝난다.
-/// 이미 값이 있으면(직접 준 경우 포함) 그대로 둔다.
-pub fn prepare_backend() {
-    if cpu_is_intel() || std::env::var_os("CT2_USE_MKL").is_some() {
-        return;
-    }
-    let Ok(exe) = std::env::current_exe() else { return };
-    let status = std::process::Command::new(exe)
-        .args(std::env::args_os().skip(1))
-        .env("CT2_USE_MKL", "1")
-        .status();
-    if let Ok(status) = status {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-    // 다시 실행하지 못하면 이대로 계속한다(번역 모델을 불러올 때 오류가 난다).
+    let cores = std::thread::available_parallelism().map_or(4, |n| n.get() as i32);
+    (cores / 2).max(1)
 }

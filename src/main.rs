@@ -26,8 +26,6 @@ mod player_ui;
 mod subfile;
 mod translate;
 
-use intel_onemkl_prebuild as _; // MKL 정적 라이브러리를 링크에 넣는다.
-
 use asr::Model;
 use pipeline::{Models, Shared, Source};
 use std::sync::{Arc, Mutex};
@@ -56,8 +54,12 @@ impl Lang {
     }
 }
 
+/// 창 아이콘(64×64 RGBA, scripts/make-icon.py가 만든다).
+pub fn app_icon() -> eframe::egui::IconData {
+    eframe::egui::IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 }
+}
+
 fn main() {
-    translate::prepare_backend();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let model = match value("--model").as_deref() {

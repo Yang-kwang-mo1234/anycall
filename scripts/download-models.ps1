@@ -34,15 +34,13 @@ foreach ($Size in $Sizes) {
 # 음성 언어 판별(플레이어의 AI 자막 자동 선택): Whisper tiny 다국어
 Get-Archive "sherpa-onnx-whisper-tiny" "tiny-tokens.txt"
 
-# 번역: NLLB-200 distilled 600M, CTranslate2 int8 변환본
-$Nllb = Join-Path $Dir "nllb-200-distilled-600M-ct2-int8"
-$Hf = "https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main"
-New-Item -ItemType Directory -Force $Nllb | Out-Null
-foreach ($f in "config.json", "shared_vocabulary.txt", "sentencepiece.bpe.model", "tokenizer.json", "special_tokens_map.json", "tokenizer_config.json", "model.bin") {
-    $Out = Join-Path $Nllb $f
-    if (-not (Test-Path $Out)) {
-        Write-Host "받는 중: nllb/$f"
-        Invoke-WebRequest "$Hf/$f" -OutFile $Out
-    }
+# 번역: Hy-MT2-1.8B (Tencent), llama.cpp용 GGUF Q4_K_M (약 1.1GB)
+$Mt = Join-Path $Dir "Hy-MT2-1.8B-GGUF"
+New-Item -ItemType Directory -Force $Mt | Out-Null
+$Gguf = Join-Path $Mt "Hy-MT2-1.8B-Q4_K_M.gguf"
+if (-not (Test-Path $Gguf)) {
+    Write-Host "받는 중: Hy-MT2-1.8B-Q4_K_M.gguf"
+    Invoke-WebRequest "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf" -OutFile "$Gguf.part"
+    Move-Item "$Gguf.part" $Gguf
 }
 Write-Host "완료: $((Resolve-Path $Dir).Path)"

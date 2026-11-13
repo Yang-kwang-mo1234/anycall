@@ -21,6 +21,7 @@ pub fn run(model: Model) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("anycall 자막")
+            .with_icon(crate::app_icon())
             .with_inner_size([340.0, 200.0])
             .with_resizable(false),
         // wgpu는 Windows에서 투명 창을 합성하지 못한다. 자막 오버레이를 투명하게 하려고 OpenGL을 쓴다.
