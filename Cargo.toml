@@ -6,9 +6,9 @@ edition = "2021"
 
 [dependencies]
 sherpa-onnx = { version = "2.0.1", default-features = false, features = ["static"] }
-ct2rs = { version = "0.11.0", default-features = false, features = ["mkl", "tokenizers"] }
-# ct2rs-sys가 쓰는 MKL 정적 라이브러리. 코드에서 참조해야 링크에 들어간다(main.rs).
-intel-onemkl-prebuild = "0.2.2"
+# 번역(Hy-MT2-1.8B GGUF). llama.cpp를 소스로 빌드한다(CMake, bindgen용 libclang 필요: scripts/build.ps1).
+# 기본 기능의 openmp는 MSVC에서 vcomp DLL이 따라와야 해서 끈다(ggml 자체 스레드 풀을 쓴다).
+llama-cpp-2 = { version = "0.1.161", default-features = false }
 anyhow = "1"
 wasapi = "0.27.0"
 eframe = { version = "0.37.0", features = ["glow"] }
@@ -31,3 +31,7 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[build-dependencies]
+# 실행 파일 아이콘(build.rs)
+winresource = "0.1.34"

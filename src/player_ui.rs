@@ -37,6 +37,7 @@ pub fn run(opts: Options) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("anycall 자막")
+            .with_icon(crate::app_icon())
             .with_decorations(false)
             .with_transparent(true)
             .with_has_shadow(false)
@@ -165,7 +166,7 @@ impl App {
             show_source: false,
         };
         if let Some(f) = opts.file {
-            app.open(&f, &cc.egui_ctx);
+            app.open_path(&f, &cc.egui_ctx);
         }
         Ok(app)
     }
@@ -351,14 +352,29 @@ impl App {
         self.open_path(&path, ctx);
     }
 
-    /// 자막 파일이면 자막으로, 그 밖에는 동영상으로 연다.
+    /// 동영상이면 연다. 자막 파일이면 옆에서 이름이 맞는 동영상을 찾아 그 자막과 함께 연다.
+    /// 맞는 동영상이 이미 열려 있거나 없으면 지금 동영상에 자막만 바꿔 넣는다.
     fn open_path(&mut self, f: &str, ctx: &egui::Context) {
-        let ext = std::path::Path::new(f).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        if crate::subfile::is_subtitle_ext(&ext) {
-            self.load_sub_file(std::path::Path::new(f), ctx);
-        } else {
+        let path = std::path::Path::new(f);
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if !crate::subfile::is_subtitle_ext(&ext) {
             self.open(f, ctx);
+            return;
         }
+        if let Some(video) = crate::subfile::find_video(path) {
+            let video = video.display().to_string();
+            let same = self.file.as_deref().is_some_and(|cur| cur.eq_ignore_ascii_case(&video));
+            if !same {
+                self.open(&video, ctx);
+                if self.file.as_deref() != Some(video.as_str()) {
+                    return; // 동영상을 열지 못했다(오류는 화면에 나온다).
+                }
+            }
+        } else if self.file.is_none() {
+            self.toast("이 자막에 맞는 동영상을 찾지 못했습니다");
+            return;
+        }
+        self.load_sub_file(path, ctx);
     }
 
     fn toggle_play(&mut self) {

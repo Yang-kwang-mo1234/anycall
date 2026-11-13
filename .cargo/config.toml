@@ -1,3 +1,8 @@
-# sherpa-onnx 정적 라이브러리가 /MT(정적 C 런타임)로 빌드돼 있어 맞춘다. CTranslate2도 이 설정을 따라 빌드된다.
+# sherpa-onnx 정적 라이브러리가 /MT(정적 C 런타임)로 빌드돼 있어 맞춘다.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+# llama.cpp(llama-cpp-sys-2)도 정적 C 런타임(/MT)으로 빌드한다.
+LLAMA_STATIC_CRT = "1"
+CMAKE_TOOLCHAIN_FILE = { value = "cmake/msvc-static-crt.cmake", relative = true }

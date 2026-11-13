@@ -12,7 +12,7 @@
 - 음성 구간 검출: Silero VAD
 - 음성 언어 판별: sherpa-onnx + Whisper tiny 다국어
 - 음성 인식: sherpa-onnx + Moonshine tiny (영어, 일본어 각각)
-- 번역: CTranslate2 + NLLB-200 distilled 600M (Intel MKL)
+- 번역: llama.cpp + Hy-MT2-1.8B (Tencent, GGUF Q4_K_M)
 - 화면: egui(OpenGL) 투명 창을 영상 창 위에 겹친다
 
 설계와 측정 결과는 [docs/PLAYER_PLAN.md](docs/PLAYER_PLAN.md)(플레이어)와 [docs/PLAN.md](docs/PLAN.md)(오버레이)에 있습니다.
@@ -25,7 +25,7 @@
 
 ## 모델 받기
 
-모델은 저장소에 넣지 않습니다. `models/`에 받습니다(약 800MB, 대부분 번역 모델).
+모델은 저장소에 넣지 않습니다. `models/`에 받습니다(약 1.4GB, 대부분 번역 모델).
 
 ```powershell
 .\scripts\download-models.ps1
@@ -35,13 +35,15 @@
 
 ## 빌드
 
-CTranslate2를 C++ 소스부터 빌드하므로 첫 빌드는 몇 분 걸립니다. 스크립트가 Visual Studio의 CMake와 nuget.exe(Intel MKL 다운로드용)를 PATH에 넣고 cargo를 실행합니다.
+llama.cpp를 C++ 소스부터 빌드하므로 첫 빌드는 몇 분 걸립니다. 스크립트가 Visual Studio의 CMake를 PATH에 넣고, Rust 바인딩 생성에 필요한 libclang을 잡은 뒤(`LIBCLANG_PATH`가 없으면 pip의 `libclang` 휠을 `target	ools`에 받습니다) cargo를 실행합니다.
 
 ```powershell
 .\scripts\build.ps1
 ```
 
 다른 cargo 명령도 같은 방법으로 실행합니다: `.\scripts\build.ps1 clippy --release`, `.\scripts\build.ps1 test --release`
+
+실행 파일 아이콘은 `assets/anycall.ico`이고 `build.rs`가 실행 파일에 넣습니다. "연결 프로그램"으로 anycall에 연결한 동영상 파일도 이 아이콘으로 보입니다. 아이콘을 바꾸려면 `scripts/make-icon.py`를 고쳐 `python scripts/make-icon.py`로 다시 만듭니다.
 
 ## 플레이어
 
@@ -99,9 +101,9 @@ CTranslate2를 C++ 소스부터 빌드하므로 첫 빌드는 몇 분 걸립니�
 
 릴리스 빌드는 창 프로그램이라 PowerShell에서는 출력이 프롬프트 뒤에 섞여 나올 수 있습니다. `| Out-Host`를 붙이면 끝날 때까지 기다립니다.
 
-### Intel이 아닌 CPU (AMD 등)
+### 번역 속도 조절
 
-CTranslate2는 Intel이 아닌 CPU에서 MKL을 끄고, MKL을 켜도 int8 연산은 수십 배 느립니다(문장당 수십 초). 그래서 AMD 등에서는 자동으로 MKL을 켜고(`CT2_USE_MKL=1`로 자기 자신을 다시 실행) 번역을 float32로 합니다. 문장당 번역이 약 1~3초 걸리고 메모리를 약 3GB 씁니다(Ryzen 5 7530U에서 측정). `ANYCALL_CT2_COMPUTE`(`int8` | `int8_float32` | `float32`)로 계산 방식을 직접 고를 수 있습니다.
+번역은 CPU 논리 코어의 절반을 씁니다. `ANYCALL_LLM_THREADS`로 스레드 수를 바꿀 수 있습니다. `ANYCALL_LLAMA_LOG=1`을 주면 llama.cpp 로그를 보여 줍니다.
 
 ## 알려진 한계
 
@@ -111,7 +113,7 @@ CTranslate2는 Intel이 아닌 CPU에서 MKL을 끄고, MKL을 켜도 int8 연�
 ## 모델 라이선스
 
 - Moonshine 영어 모델: MIT License. Moonshine 일본어 모델: Moonshine Community License(비상업 라이선스). 원문은 모델 폴더의 `LICENSE`에 있습니다.
-- NLLB-200: CC-BY-NC 4.0 (비상업 전용)
+- Hy-MT2-1.8B: Apache License 2.0 (원문: 모델 저장소의 `LICENSE.txt`)
 - Whisper: MIT License
 - Silero VAD: MIT License
-- Intel MKL(빌드 시 정적 링크): Intel Simplified Software License
+- llama.cpp(빌드 시 정적 링크): MIT License
